@@ -30,6 +30,8 @@
 #include "sql_select.h"
 #include "sql_parse.h"                          // check_stack_overrun
 #include "sql_time.h"                  // make_truncated_value_warning
+#include "utils.h"
+#include "regex2.h"
 
 static bool convert_constant_item(THD *, Item_field *, Item **);
 static longlong
@@ -5070,6 +5072,63 @@ void Item_func_regex::cleanup()
   DBUG_VOID_RETURN;
 }
 
+Item_func::optimize_type Item_func_regex::select_optimize() const
+{
+  if (!regex_is_const) {
+    return OPTIMIZE_NONE;
+  }
+
+  struct re_guts* g = preg.re_g;
+
+  int stidx = g->firststate + 1; // +1 for OEND
+
+  if (stidx + 2 > g->laststate) {
+    // regex is not long enough to be useful for our purposes here
+    return OPTIMIZE_NONE;
+  }
+
+  if (OP(g->strip[stidx]) != OBOL) {
+    // regular expression does not begin with a ^ anchor
+    return OPTIMIZE_NONE;
+  }
+
+  if (OP(g->strip[stidx + 1]) == OCHAR) {
+    return OPTIMIZE_OP;
+  }
+
+  return OPTIMIZE_NONE;
+}
+
+String* Item_func_regex::static_prefix()
+{
+  if (select_optimize() != OPTIMIZE_OP) {
+    return NULL;
+  }
+
+  if(has_static_prefix) {
+    return &static_prefix_;
+  }
+
+  struct re_guts* g = preg.re_g;
+
+  int stidx = g->firststate + 2; // +1 for OEND, +1 for OBOL
+
+  for(; stidx <= g->laststate && OP(g->strip[stidx]) == OCHAR; stidx++) {
+    char c = (char)OPND(g->strip[stidx]);
+    // this shit is required because we're abusing my_like_range to do the
+    // indexy part of this.
+    if(c == '\\' || c == '_' || c == '%') {
+      static_prefix_.append('\\');
+    }
+    static_prefix_.append(c);
+  }
+
+  static_prefix_.append('%');
+
+  has_static_prefix = true;
+
+  return &static_prefix_;
+}
 
 #ifdef LIKE_CMP_TOUPPER
 #define likeconv(cs,A) (uchar) (cs)->toupper(A)

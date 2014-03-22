@@ -1449,18 +1449,25 @@ class Item_func_regex :public Item_bool_func
   int regex_lib_flags;
   String conv;
   int regcomp(bool send_error);
+
+  bool has_static_prefix;
+  String static_prefix_;
 public:
   Item_func_regex(Item *a,Item *b) :Item_bool_func(a,b),
-    regex_compiled(0),regex_is_const(0) {}
+    regex_compiled(0),regex_is_const(0),has_static_prefix(false) {}
   void cleanup();
   longlong val_int();
   bool fix_fields(THD *thd, Item **ref);
+  enum Functype functype() const { return REGEX_FUNC; }
   const char *func_name() const { return "regexp"; }
+  optimize_type select_optimize() const;
 
   virtual inline void print(String *str, enum_query_type query_type)
   {
     print_op(str, query_type);
   }
+
+  String* static_prefix();
 
   CHARSET_INFO *compare_collation() { return cmp_collation.collation; }
 };

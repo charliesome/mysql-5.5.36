@@ -5961,6 +5961,71 @@ get_mm_leaf(RANGE_OPT_PARAM *param, COND *conf_func, Field *field,
     goto end;
   }
 
+  if (optimize_range && type == Item_func::REGEX_FUNC) {
+    Item_func_regex* re = (Item_func_regex*)conf_func;
+
+    if(String* static_prefix = re->static_prefix()) {
+      uchar *min_str, *max_str;
+      size_t length, offset, min_length, max_length;
+      uint field_length= field->pack_length()+maybe_null;
+
+      offset=maybe_null;
+      length=key_part->store_length;
+
+      if (length != key_part->length  + maybe_null)
+      {
+        /* key packed with length prefix */
+        offset+= HA_KEY_BLOB_LENGTH;
+        field_length= length - HA_KEY_BLOB_LENGTH;
+      }
+      else
+      {
+        if (unlikely(length < field_length))
+        {
+          /*
+            This can only happen in a table created with UNIREG where one key
+            overlaps many fields
+          */
+          length= field_length;
+        }
+        else
+          field_length= length;
+      }
+      length+=offset;
+      if (!(min_str= (uchar*) alloc_root(alloc, length*2)))
+        goto end;
+
+      max_str=min_str+length;
+      if (maybe_null)
+        max_str[0]= min_str[0]=0;
+
+      if(my_like_range(
+          field->charset(),
+          static_prefix->ptr(),
+          static_prefix->length(),
+          '\\', // lol
+          '_',  // ditto
+          '%',  // ditto
+          field_length,
+          (char*)min_str+offset,
+          (char*)max_str+offset,
+          &min_length,
+          &max_length)
+      ) {
+        // my_like_range returned with error, can't optimize
+        goto end;
+      }
+
+      if (offset != maybe_null) {
+        int2store(min_str + maybe_null, min_length);
+        int2store(max_str + maybe_null, max_length);
+      }
+
+      tree = new (alloc) SEL_ARG(field, min_str, max_str);
+    }
+    goto end;
+  }
+
   if (!optimize_range &&
       type != Item_func::EQ_FUNC &&
       type != Item_func::EQUAL_FUNC)
